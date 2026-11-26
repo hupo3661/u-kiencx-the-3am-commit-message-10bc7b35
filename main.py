@@ -59,21 +59,64 @@ class EntryError(Exception):
     """The entry or the output file failed a check; exit non-zero."""
 
 
+def _check_not_empty(line: str) -> str | None:
+    """An empty entry has nothing to grade."""
+    if not line.strip():
+        return "entry line is empty"
+    return None
+
+
+def _check_length(line: str, max_chars: int) -> str | None:
+    if len(line) > max_chars:
+        return (
+            f"entry line is {len(line)} chars, over the "
+            f"{max_chars}-char limit"
+        )
+    return None
+
+
+def _check_single_line(line: str) -> str | None:
+    if "\n" in line or "\r" in line:
+        return "entry line must be a single line"
+    return None
+
+
+def _check_no_surrounding_whitespace(line: str) -> str | None:
+    if line != line.strip():
+        return "entry line has leading or trailing whitespace"
+    return None
+
+
+def _check_no_control_chars(line: str) -> str | None:
+    """Control characters would not survive the grading gate intact."""
+    bad = sorted({repr(ch) for ch in line if not ch.isprintable()})
+    if bad:
+        return f"entry line contains control characters: {', '.join(bad)}"
+    return None
+
+
+def _check_entry_shape(line: str) -> str | None:
+    """The line must keep its commit-message form: a `fix:` prefix."""
+    if not line.startswith("fix:"):
+        return "entry line must keep its commit-message 'fix:' opening"
+    return None
+
+
 def validate(config: EntryConfig) -> None:
     """Reject any entry the grading gate would refuse, with a reason."""
     line = config.line
-    problems: list[str] = []
-    if not line.strip():
-        problems.append("entry line is empty")
-    if len(line) > config.max_chars:
-        problems.append(
-            f"entry line is {len(line)} chars, over the "
-            f"{config.max_chars}-char limit"
+    problems = [
+        problem
+        for problem in (
+            _check_not_empty(line),
+            _check_length(line, config.max_chars),
+            _check_single_line(line),
+            _check_no_surrounding_whitespace(line),
+            _check_no_control_chars(line),
+            _check_entry_shape(line),
         )
-    if "\n" in line or "\r" in line:
-        problems.append("entry line must be a single line")
-    if line != line.strip():
-        problems.append("entry line has leading or trailing whitespace")
+        if problem is not None
+    ]
     if problems:
         raise EntryError("; ".join(problems))
 
@@ -90,6 +133,8 @@ def write_entry_atomic(config: EntryConfig, target: Path) -> Path:
     A half-written entry.txt is worse than no entry.txt, so the bytes
     only ever appear at the target path once they are complete.
     """
+    if target.exists() and target.is_dir():
+        raise EntryError(f"output path {target} is a directory, not a file")
     target.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(
         dir=str(target.parent), prefix=target.name + ".", suffix=".tmp"
